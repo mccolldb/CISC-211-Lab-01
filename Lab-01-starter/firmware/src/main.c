@@ -40,18 +40,11 @@
 #include <malloc.h>
 #include "definitions.h"                // SYS function prototypes
 
-/* RTC Time period match values for input clock of 1 KHz */
-#define PERIOD_500MS                            512
-#define PERIOD_1S                               1024
-#define PERIOD_2S                               2048
-#define PERIOD_4S                               4096
+// Curiosity nano board support
+void cnano_setup();
+void cnano_printf(const char *format, ...);
 
-#define MAX_PRINT_LEN 400
 
-static volatile bool isRTCExpired = false;
-static volatile bool changeTempSamplingRate = false;
-static volatile bool isUSARTTxComplete = true;
-static uint8_t uartTxBuffer[MAX_PRINT_LEN] = {0};
 // static char * pass = "pass";
 // static char * fail = "fail";
 
@@ -63,96 +56,47 @@ static uint8_t uartTxBuffer[MAX_PRINT_LEN] = {0};
 // value.
 //
 // Function signature
-extern int32_t asmFunc(int32_t);
-
-// set this to 0 if using the simulator. BUT note that the simulator
-// does NOT support the UART, so there's no way to print output.
-#define USING_HW 1
-
-#if USING_HW
-static void rtcEventHandler (RTC_TIMER32_INT_MASK intCause, uintptr_t context)
-{
-    if (intCause & RTC_MODE0_INTENSET_CMP0_Msk)
-    {            
-        isRTCExpired    = true;
-    }
-}
-static void usartDmaChannelHandler(DMAC_TRANSFER_EVENT event, uintptr_t contextHandle)
-{
-    if (event == DMAC_TRANSFER_EVENT_COMPLETE)
-    {
-        isUSARTTxComplete = true;
-    }
-}
-#endif
+extern int32_t asmFunc(int32_t num, int32_t denom, int32_t* quot, int32_t* rem);
+extern int32_t multFunc(int32_t A, int32_t B, int32_t*product);
 
 // *****************************************************************************
 // *****************************************************************************
 // Section: Main Entry Point
 // *****************************************************************************
 // *****************************************************************************
-int main ( void )
+
+int main(void) // entry point 
 {
-    
- 
-#if USING_HW
-    /* Initialize all modules */
-    SYS_Initialize ( NULL );
-    DMAC_ChannelCallbackRegister(DMAC_CHANNEL_0, usartDmaChannelHandler, 0);
-    RTC_Timer32CallbackRegister(rtcEventHandler, 0);
-    RTC_Timer32Compare0Set(PERIOD_500MS);
-    RTC_Timer32CounterSet(0);
-    RTC_Timer32Start();
-#else // using the simulator
-    isRTCExpired = true;
-    isUSARTTxComplete = true;
-#endif //SIMULATOR
+    cnano_setup();
 
-    int32_t inputValue = 0;
-    int32_t outputValue = 0;
-    uint32_t testCount = 0;
-    
-    while ( true )
+    int32_t numerator = 17; /* starting value */
+    int32_t denominator = 3;
+
+    for (uint32_t count = 0; count < 10; count++) // test loop
     {
-        // Toggle the LED to show we're running a new test case
-        LED0_Toggle();
-
-        // reset the state variables for the timer and serial port funcs
-        isRTCExpired = false;
-        isUSARTTxComplete = false;
-
-        // !!!! THIS IS WHERE YOUR ASSEMBLY LANGUAGE PROGRAM GETS CALLED!!!!
         // Call our assembly function defined in file asmFunc.s
-        outputValue = asmFunc(inputValue);
+        int32_t quotient = -1;
+        int32_t remainder = -1;
+        int32_t status = asmFunc(numerator, denominator, &quotient, &remainder);
 
-        // Now print the result to the serial port
-        snprintf((char*)uartTxBuffer, MAX_PRINT_LEN,
-                "========= Test Number: %lu\r\n"
-                "input  value: %ld\r\n"
-                "output value: %ld\r\n"
-                "\r\n",
-                testCount, inputValue, outputValue); 
+        cnano_printf(
+                "Test:%lu  status=%ld in(%ld/%ld) --> out(%ld rem %ld)\r\n\n",
+                count, status, numerator, denominator, quotient, remainder);
 
-        // add 1 to the test counter
-        ++testCount;
+        int32_t product = 0;
+        status = multFunc(numerator, denominator, &product);
 
-#if USING_HW 
-        DMAC_ChannelTransfer(DMAC_CHANNEL_0, uartTxBuffer, \
-            (const void *)&(SERCOM5_REGS->USART_INT.SERCOM_DATA), \
-            strlen((const char*)uartTxBuffer));
+        cnano_printf(
+                "Test:%lu  status=%ld in(%ld * %ld) --> out(%ld)\r\n\n",
+                count, status, numerator, denominator, product);
 
-        // spin here until the UART has completed transmission
-        // and the timer has expired
-        //while  (false == isUSARTTxComplete ); 
-        while ((isRTCExpired == false) ||
-               (isUSARTTxComplete == false));
-#endif
-    } // while ...
-            
-    /* Execution should not come here during normal operation */
-    return ( EXIT_FAILURE );
+        numerator++; // change numerator
+        LED0_Toggle(); // Toggle the LED to show we're running a new test case
+    }
+    cnano_printf("==== TESTING COMPLETE =====\r\n\n");
+    return ( EXIT_FAILURE);
 }
 /*******************************************************************************
  End of File
-*/
+ */
 
