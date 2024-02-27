@@ -63,7 +63,27 @@ multloop:
     STR R3,[R2]    /* save completed product accumulator to provided address */
     mov R0,0       /* return good status */
     pop {r4-r11,PC}
+ 
+.global cnano_printf
+.type cnano_printf,%function
     
+.global printFunc
+.type printFunc,%function
+printFunc:
+    push {r4-r11,LR} /* save regs I may disturb */
+    mov R0,5  /* put data into working regs */
+    mov R1,6
+    mov R2,7
+    mov R3,8
+    push {r0-r3}   // save my working regs before calling
+    LDR R0, =format1
+    mov R1,17
+    BLX cnano_printf  // call may change R0-R3
+    pop {r0-r3}    // retore my working regs after call
+    /* do more work */
+    mov R0,0       /* return good status */
+    pop {r4-r11,PC} /* restore callers registers */
+format1: .asciz "Hello Assembly passed =%ld\r\n"    
 /**********************************************************************/   
 .end  /* The assembler will not process anything after this directive!!! */
            
