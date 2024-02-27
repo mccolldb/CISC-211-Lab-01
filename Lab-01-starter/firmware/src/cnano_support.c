@@ -60,14 +60,20 @@ void cnano_printf(const char *__restrict format, ...) {
     va_end(args);
     
 #if USING_HW 
-    isRTCExpired = false;
     isUSARTTxComplete = false;
     DMAC_ChannelTransfer(DMAC_CHANNEL_0, uartTxBuffer, \
             (const void *) &(SERCOM5_REGS->USART_INT.SERCOM_DATA), \
             strlen((const char*) uartTxBuffer));
+    while (isUSARTTxComplete == false);
 #endif
 
     // spin here until:
     //     the timer has expired and UART transmission complete 
-    while ((isRTCExpired == false) || (isUSARTTxComplete == false));
+    //while ((isRTCExpired == false) || (isUSARTTxComplete == false));
+}
+
+void cnano_timerwait()
+{
+    while (isRTCExpired == false); /* spin */
+    isRTCExpired = false;  /* reset flag for next cycle */
 }

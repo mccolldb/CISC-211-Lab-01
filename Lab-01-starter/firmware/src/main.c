@@ -43,7 +43,7 @@
 // Curiosity nano board support
 void cnano_setup();
 void cnano_printf(const char *format, ...);
-
+void cnano_timerwait();
 
 // static char * pass = "pass";
 // static char * fail = "fail";
@@ -58,6 +58,7 @@ void cnano_printf(const char *format, ...);
 // Function signature
 extern int32_t asmFunc(int32_t num, int32_t denom, int32_t* quot, int32_t* rem);
 extern int32_t multFunc(int32_t A, int32_t B, int32_t*product);
+extern int32_t printFunc();
 
 // *****************************************************************************
 // *****************************************************************************
@@ -68,16 +69,19 @@ extern int32_t multFunc(int32_t A, int32_t B, int32_t*product);
 int main(void) // entry point 
 {
     cnano_setup();
-
+    int32_t status = -1;
     int32_t numerator = 17; /* starting value */
     int32_t denominator = 3;
 
     for (uint32_t count = 0; count < 10; count++) // test loop
     {
+        status = printFunc();
+        cnano_printf("printFunc -> %ld\r\n",status);
+        
         // Call our assembly function defined in file asmFunc.s
         int32_t quotient = -1;
         int32_t remainder = -1;
-        int32_t status = asmFunc(numerator, denominator, &quotient, &remainder);
+        status = asmFunc(numerator, denominator, &quotient, &remainder);
 
         cnano_printf(
                 "Test:%lu  status=%ld in(%ld/%ld) --> out(%ld rem %ld)\r\n\n",
@@ -92,6 +96,7 @@ int main(void) // entry point
 
         numerator++; // change numerator
         LED0_Toggle(); // Toggle the LED to show we're running a new test case
+        cnano_timerwait();
     }
     cnano_printf("==== TESTING COMPLETE =====\r\n\n");
     return ( EXIT_FAILURE);
