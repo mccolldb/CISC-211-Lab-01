@@ -2,6 +2,256 @@
 
 #include <xc.h>
 .include "Fixed_point_macros.inc" 
+// Lab 12 Sorting sized Values**************************************************
+.data
+.align 4
+.global whole_words,half_words,byte_words
+whole_words: .word 0xFFFF8002, 0xFFFF8001, 0x00007000, 0x00003300 
+             .word 0x00004000, 0x00004001, 0x00004005, 0x00000000
+
+half_words:  .word 0x11118002, 0x22228001, 0x33337000, 0x44440330
+             .word 0x55554000, 0x66664001, 0x77774005, 0x88880000
+
+byte_words:  .word 0x11111182, 0x22222281, 0x33333370, 0x44444433
+             .word 0x55555550, 0x66666641, 0x77777785, 0x88888800 
+    
+.text
+.syntax unified //allow both 16b and 32b extended Thumb2 instructions
+.align
+.EQU UNSIGNED, 0
+.EQU   SIGNED, 1
+.EQU   BYTES,  1
+.EQU   HALFS,  2
+.EQU   WORDS,  4
+.EQU ZERO_DETECT, -1
+.global asmSort
+.type asmSort,%function
+asmSort:// int32 count = asmSort(int32* addr, uint32 signed, uint32 size)
+        //         R0                    R0           R1=0,1   R2=1,2,4
+    push {r4-r11,LR} /* save the caller's registers */
+    MOV R3,R0       // save array base addr
+    MOV R5,0        // init total swap counter
+next_outer:
+    MOV R4,R3       // reset array addr to base addr
+    MOV R6,0        // reset pass swaps
+next_inner:
+    MOV R0,R4        // get addr array[i]
+    BL  asmSwap      // call swap (note: R1, R2 same as passed in)
+    CMP R0,ZERO_DETECT
+    BEQ end_inner
+    ADD R6,R0        // accumulate swaps this pass
+    ADD R4,4         // point addr to next 32bit word
+    B   next_inner
+end_inner:
+    CBZ R6, set_sort_return  // no new swaps -- we are done sorting
+    ADD R5,R6        // accum total swaps
+    b next_outer
+    
+set_sort_return:
+    MOV R0,R5        // set return value = total swaps
+    pop  {r4-r11,PC} /* save the caller's registers */
+
+.global asmSwap
+.type asmSwap,%function
+asmSwap:// uint32 swapped = asmSwap(int32* addr, uint32 signed, uint32 size) 
+        //         R0=0,1                  R0           R1=0,1   R2=1,2,4
+	// note: R1,R2 used but not changed  -- R0 is retrun value 
+    push {r4-r11,LR} /* save the caller's registers */
+    MOV R6,ZERO_DETECT    // default return value
+check_8bit:
+    CMP R2,BYTES        // check size
+    BNE check_16bit
+    CMP R1,SIGNED        // select signed/unsigned load
+    LDRSBEQ R4,[R0]
+    LDRSBEQ R5,[R0,4]
+    LDRBNE R4,[R0]
+    LDRBNE R5,[R0,4]
+    CBZ R4,set_swap_return
+    CBZ R5,set_swap_return
+    CMP R4,R5        // check if first > second
+    STRBGT R5,[R0]   // write back in reverse order
+    STRBGT R4,[R0,4]
+    MOVGT R6,1       // mark as swapped
+    MOVLE R6,0       // else no swap
+    B set_swap_return
+    
+check_16bit:
+    CMP R2,HALFS      // check size
+    BNE check_32bit
+    CMP R1,SIGNED      // select signed/unsigned load
+    LDRSHEQ R4,[R0]
+    LDRSHEQ R5,[R0,4]
+    LDRHNE R4,[R0]
+    LDRHNE R5,[R0,4]
+    CBZ R4,set_swap_return
+    CBZ R5,set_swap_return
+    CMP R4,R5
+    STRHGT R5,[R0]
+    STRHGT R4,[R0,4]
+    MOVGT R6,1
+    MOVLE R6,0
+    B set_swap_return
+    
+check_32bit:
+    LDR R4,[R0]
+    LDR R5,[R0,4]
+    CBZ R4,set_swap_return
+    CBZ R5,set_swap_return
+    CMP R1,SIGNED
+    BNE unsigned_compare
+    CMP R4,R5
+    STRGT R5,[R0]
+    STRGT R4,[R0,4]
+    MOVGT R6,1
+    MOVLE R6,0
+    B set_swap_return
+unsigned_compare:
+    CMP R4,R5
+    STRHI R5,[R0]
+    STRHI R4,[R0,4]
+    MOVHI R6,1
+    MOVLS R6,0
+    B set_swap_return
+    
+set_swap_return:
+    MOV R0,R6  // set return value
+    pop  {r4-r11,PC} /* save the caller's registers */
+
+// Lab 11 Comparing Float Values***********************************************
+.data
+.align 4
+// structure offsets...
+.EQU FLOAT_OFF,	    0x0
+.EQU SIGN_OFF,	    0x4
+.EQU BIASED_OFF,    0x8
+.EQU EXP_OFF,	    0xC
+.EQU MANT_OFF,	    0x10
+.global f1,f2,fMax
+f1:	     .word 0,0,0,0,0
+f2:	     .word 0,0,0,0,0
+fMax:	     .word 0,0,0,0,0
+NaN_struct:  .word 0x7FFFFFFF, 0x7FFFFFFF, 0x7FFFFFFF, 0x7FFFFFFF, 0x7FFFFFFF
+  
+# Tell the assembler that what follows is in instruction memory    
+.text
+.syntax unified //allow both 16b and 32b extended Thumb2 instructions
+.align
+
+.global asmFMax
+.type asmFMax,%function
+asmFMax:
+    /* float* max=R0 = asmFMax(float f1=R0, float f2=R1)* fMax=R2, addr=R3 */
+    push {r4-r11,LR} /* save the caller's registers */
+    /* save inputs & initialize output values */
+    /* Note: initialize to NaN_struct so easy to see values being filled */
+    mov r5,R0   // save R0,R1 inputs while initing structs
+    mov r6,R1
+    LDR R0,=NaN_struct     // R0= addr(copy from struct)
+    
+    LDR R1,=f1             // R1= addr(copy  to  struct)
+    bl copy_struct         // init f1 struct
+    STR R5,[R1,FLOAT_OFF]  // fill f1.fvalue
+ 
+    LDR R1,=f2             // R1= addr(copy to struct)
+    bl copy_struct         // init f2 struct
+    STR R6,[R1,FLOAT_OFF]  // fill f2.fvalue
+ 
+    LDR R1,=fMax           // R1= addr(copy to struct)
+    bl copy_struct         // init fMax struct
+   
+    /* analyze the two floating point values */
+    LDR R0,=f1             // R0= struct to extract
+    BL  extract_parts
+    LDR R0,=f2             // R0= struct to extract
+    BL  extract_parts
+    
+check_NaN: // check if either is NaN => copy to fMax
+    .EQU NaN,0x7FC00000
+    LDR R5,=NaN
+    
+    LDR R0,=f1            // R0= addr(copy from struct)
+    LDR R1,[R0,FLOAT_OFF] // read value
+    CMP R1,R5             // check
+    BEQ return_fMax
+    
+    LDR R0,=f2            // R0= addr(copy from struct)
+    LDR R1,[R0,FLOAT_OFF] // read value
+    CMP R1,R5             // check
+    BEQ return_fMax
+    
+    LDR R0,=f1   // setup base pointers - common forech check            
+    LDR R1,=f2           
+
+check_sign:
+    LDR R2,[R0,SIGN_OFF]
+    LDR R3,[R1,SIGN_OFF]
+    CMP R2,R3
+    BEQ check_exp // signs same
+    CMP R2,0      // signs differ, 
+    LDREQ R0,=f1  // f1.sign is positive => choose f1
+    LDRNE R0,=f2  // f1.sign is negative => choose f2
+    b return_fMax
+
+check_exp:
+    LDR R2,[R0,BIASED_OFF]
+    LDR R3,[R1,BIASED_OFF]
+    CMP R2,R3
+    BEQ check_mant // exps same
+    LDRGE R0,=f1   // f1.exp>f2.exp => choose f1
+    LDRLT R0,=f2   // f1.exp<f2.exp => choose f2
+    b return_fMax
+
+check_mant:
+    LDR R2,[R0,MANT_OFF]
+    LDR R3,[R1,MANT_OFF]
+    CMP R2,R3
+    LDRGE R0,=f1  // f1.mant>=f2.mant => choose f1
+    LDRLT R0,=f2  // f1.mant< f2.mant => choose f2
+    b return_fMax
+    
+return_fMax:// expect R0 = addr(copy from struct)
+    LDR R1,=fMax     // R1 = addr(copy  to  struct)
+    bl  copy_struct
+    LDR R0,=fMax    // return address of fMax
+    pop {r4-r11,PC} /* restore the caller's registers */
+
+// local function
+extract_parts: // void  extract_parts(struct float_parts*=R0)
+    // R0-R3 unchanged,R0=float value R4=field value, R5=struct base addr, R6=Mask
+    push {R4-R6,LR} /* save the caller's registers */
+    MOV R5,R0             // R5 = base of structure
+    LDR R0,[R5,FLOAT_OFF] // R4 = value of float
+    LSR R4,R0,31          // R4 = field bits; get sign bit
+    STR R4,[R5,SIGN_OFF]  // save sign bit
+    
+    LSR R4,R0,23          // shift out mantissa
+    AND R4,0xFF           // mask 8 bit exp field
+    STR R4,[R5,BIASED_OFF]// save biased exp
+    SUB R4,127            // unbias
+    STR R4,[R5,EXP_OFF]   // save exp
+    
+    LDR R6,=0x007FFFFF   // mantissa mask bits
+    AND R4,R0,R6         // and-out non-mantissa bits
+    STR R4,[R5,MANT_OFF] // save mant
+    pop {R4-R6,PC} /* restore the caller's registers */
+
+// local function
+copy_struct: // R0= from_struct addr, R1 = to_struct addr
+    push {r4,LR} /* save the caller's registers */    
+    LDR R4,[R0,FLOAT_OFF]  // read
+    STR R4,[R1,FLOAT_OFF]  // write
+    LDR R4,[R0,SIGN_OFF]
+    STR R4,[R1,SIGN_OFF]
+    LDR R4,[R0,BIASED_OFF]
+    STR R4,[R1,BIASED_OFF]
+    LDR R4,[R0,EXP_OFF]
+    STR R4,[R1,EXP_OFF]
+    LDR R4,[R0,MANT_OFF]
+    STR R4,[R1,MANT_OFF]
+    pop {r4,PC} /* restore the caller's registers */
+	
+
+ // Multiply Lab -- three versions*********************************************
 .data
 .align 4
 .global rng_Error, a_Multiplicand, a_Multiplicand_Sign, a_Multiplicand_Abs
@@ -17,13 +267,10 @@ rng_Error:           .word 0
 init_Product:        .word 0 
 final_Product:       .word 0 
 prod_Is_Neg:         .word 0
-  
-# Tell the assembler that what follows is in instruction memory    
+	 
 .text
+.syntax unified //allow both 16b and 32b extended Thumb2 instructions
 .align
-
-# Tell the assembler to allow both 16b and 32b extended Thumb instructions
-.syntax unified
 .EQU MAX16, 0x00007FFF
 .EQU MIN16, 0xFFFF8000
 .global multiply
@@ -133,16 +380,16 @@ set_return:
 multFunc: 
     //push {LR}  /* save caller state & LR */
     mov r3,0      /* initialize accumulator */
-multloop:
-    TST R0,1       /* Z=1 if lobit of shifted A clear */
-    ADDNE r3,r3,r1 /* if Z==0 add copy of shifted B into accum  */
+1:
+    TST R0,1        /* Z=1 if lobit of shifted A clear */
+    ADDNE r3,r3,r1  /* if Z==0 add copy of shifted B into accum  */
     LSL  R1,R1,1    /* double B  */
     LSRS R0,R0,1    /* halve A */
-    BNE multloop   /* loop if A not yet zero */
-    STR R3,[R2]    /* save completed accumulator to provided address */
-    mov R0,0       /* return good status */
-    //pop {PC}    /* restore caller state & LR->PC */ 
-    MOV PC,LR     /* return to caller */
+    BNE 1b          /* loop if A not yet zero */
+    STR R3,[R2]     /* save completed accumulator to provided address */
+    mov R0,0        /* return good status */
+    //pop {PC}      /* restore caller state & LR->PC */ 
+    MOV PC,LR       /* return to caller */
 
 .macro READ value,address
     LDR \value,=\address
@@ -165,16 +412,26 @@ multloop:
     ADDEQ \count,\count,1  //     inc neg count
     WRITE \value,R3,\abs   // save abs value
 .endm
+    
+.macro multMacro A,B,P
+    mov \P,0      /* initialize accumulator */
+1:
+    TST \A,1        /* Z=1 if lobit of shifted A clear */
+    ADDNE \P,\P,\B  /* if Z==0 add copy of shifted B into accum  */
+    LSL  \B,\B,1    /* double B  */
+    LSRS \A,\A,1    /* halve A */
+    BNE 1b          /* loop if A not yet zero */
+.endm
+
 .global multiplyM
 .type multiplyM,%function
 /*int32_t product=R0 = multiply(int32_t multiplicand=R0, int32_t multiplier=R1) */
-/* temporary: R3 = LDR/STR address; r2= LDR/STR value r4=neg sign counter */
+/* temporary: R2= LDR/STR value; R3 = LDR/STR address;  r4=neg sign counter */
 multiplyM: 
-    push {r4-r11,LR} /* save the caller's registers */
+    push {r4,LR} /* save the caller's R4 */
     /* initialize output values */
     LDR r2,=0   // default to no error
     WRITE r2,r3,rng_Error
-    
     LDR r2,=0xFFFFFFFF  //signal value for unset values
     WRITE R0,R3, a_Multiplicand
     WRITE R2,R3, a_Multiplicand_Sign
@@ -188,11 +445,11 @@ multiplyM:
     
     /* check range of both values >MAX16 | <MIN16 */
     LDR R2,=MAX16
-    IF R0,GT,R2,range_errorM
-    IF R1,GT,R2,range_errorM
+    IF R0,GT,R2,2f
+    IF R1,GT,R2,2f
     LDR R2,=MIN16
-    IF R0,LT,R2,range_errorM
-    IF R1,LT,R2,range_errorM
+    IF R0,LT,R2,2f
+    IF R1,LT,R2,2f
 
     /* save signs & abs of both values & set prod_Is_Neg*/
     MOV   R4,0           // init neg sign counter = 0
@@ -204,8 +461,8 @@ multiplyM:
     /* call to multiply abs values --> init_product */
     READ R0,a_Multiplicand_Abs
     READ R1,b_Multiplier_Abs
-    LDR  R2,=init_Product
-    BL multFunc   
+    multMacro R0,R1,R2  /* uses local label 1 */
+    WRITE R2,R3,init_Product
     
     /* check prod_Is_Neg --> final_Product */
     READ R0,init_Product
@@ -213,15 +470,14 @@ multiplyM:
     CMP r1,1      // if prod_Is_Neg
     NEGEQ r0,r0   //    NEG init_product
     WRITE R0,R3,final_Product
-    b set_returnM
-    
-range_errorM:
+    b 1f
+2:  // range_error
     MOV   R2,1    // set error flag
     WRITE R2,R3,rng_Error
     /* fall thru */
-set_returnM:
+1:  // set_return
     READ R0,final_Product  /* retrieve return value */
-    pop {r4-r11,PC} /* restore the caller's registers & return */
+    pop {r4,PC} /* restore the caller's registers & return */
     
 /*===========================================================================*/
  /* function: asmMain
@@ -371,6 +627,7 @@ asmFixSign:
     // TO DO    
     pop {r4-r11,PC} /* restore the caller's registers & return */
 
+
 /********************************************************************
 function name: divideFunc  calculates num/den & sets quoiitent & remainder
 useage:  status = divideFunc ( num, dem, &quotient, &remainder)
@@ -408,7 +665,7 @@ divideFunc:
     
 
 
-/* external function definition  */
+/* external function definition  *********************************************/
 .global cnano_printf
 .type cnano_printf,%function
     
@@ -429,8 +686,8 @@ printFunc:
     pop {r4-r11,PC} /* restore callers registers */
 format1: .asciz "Hello Assembly passed = %ld\r\n"    
 
+  /* a function to try out various shift instructions  ************************/
 .align 4
- /* a function to try out various shift instructions  */
 .global shiftFunc
 .type shiftFunc,%function
 shiftFunc:
@@ -469,6 +726,23 @@ shiftFunc:
     RRX R2,R3
     CLZ r0,r3         /* count leading zeros ... */
     pop {r4-r11,PC} /* restore callers registers */
+
+ /* a function to try out various floating poing coprocessor instructions *****/
+.global setup_FP_COPROC
+.type setup_FP_COPROC,%function
+setup_FP_COPROC:
+    LDR.W R0, =0xE000ED88   // CPACR is located at address 0xE000ED88
+    LDR R1, [R0]            // Read CPACR
+    ORR R1, R1, (0xF << 20) // Set bits 20-23 to enable CP10 and CP11 coprocessors
+    STR R1, [R0]            // Write back the modified
+    LDR R1, [R0]            // Read CPACR
+    MOV PC,LR               // return to caller
+
+.global FP_add
+.type FP_add,%function
+FP_add: // inputs s0,s1 --> output s0
+    VADD.F32 s0,s0,s1
+    MOV PC,LR          // return to caller
 /**********************************************************************/   
 .end  /* The assembler will not process anything after this directive!!! */
            
